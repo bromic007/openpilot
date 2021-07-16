@@ -39,17 +39,19 @@ class TestLoggerd(unittest.TestCase):
     return log_dirs[-1]
 
   def _get_log_dir(self, x):
-    for p in x.split(' '):
-      path = Path(p.strip())
-      if path.is_dir():
-        return path
+    for l in x.splitlines():
+      for p in l.split(' '):
+        path = Path(p.strip())
+        if path.is_dir():
+          return path
     return None
 
   def _get_log_fn(self, x):
-    for p in x.split(' '):
-      path = Path(p.strip())
-      if path.is_file():
-        return path
+    for l in x.splitlines():
+      for p in l.split(' '):
+        path = Path(p.strip())
+        if path.is_file():
+          return path
     return None
 
   def _gen_bootlog(self):
@@ -153,12 +155,12 @@ class TestLoggerd(unittest.TestCase):
     assert abs(boot.wallTimeNanos - time.time_ns()) < 5*1e9 # within 5s
     assert boot.launchLog == launch_log
 
-    for field, path in [("lastKmsg", "console-ramoops"), ("lastPmsg", "pmsg-ramoops-0")]:
-      path = Path(os.path.join("/sys/fs/pstore/", path))
-      val = b""
+    for fn in ["console-ramoops", "pmsg-ramoops-0"]:
+      path = Path(os.path.join("/sys/fs/pstore/", fn))
       if path.is_file():
-        val = open(path, "rb").read()
-      self.assertEqual(getattr(boot, field), val)
+        expected_val = open(path, "rb").read()
+        bootlog_val = [e.value for e in boot.pstore.entries if e.key == fn][0]
+        self.assertEqual(expected_val, bootlog_val)
 
   def test_qlog(self):
     qlog_services = [s for s in CEREAL_SERVICES if service_list[s].decimation is not None]
@@ -207,7 +209,7 @@ class TestLoggerd(unittest.TestCase):
         self.assertEqual(recv_cnt, 0, f"got {recv_cnt} {s} msgs in qlog")
       else:
         # check logged message count matches decimation
-        expected_cnt = len(msgs) // service_list[s].decimation
+        expected_cnt = (len(msgs) - 1) // service_list[s].decimation + 1
         self.assertEqual(recv_cnt, expected_cnt, f"expected {expected_cnt} msgs for {s}, got {recv_cnt}")
 
   def test_rlog(self):

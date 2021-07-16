@@ -1,32 +1,29 @@
-#include <stdio.h>
-#include <stdbool.h>
-#include <assert.h>
-#include <unistd.h>
+#include "selfdrive/camerad/cameras/camera_qcom.h"
+
 #include <fcntl.h>
-#include <math.h>
 #include <poll.h>
 #include <sys/ioctl.h>
-#include <atomic>
-#include <algorithm>
+#include <unistd.h>
 
-#include <linux/media.h>
+#include <algorithm>
+#include <atomic>
+#include <cassert>
+#include <cmath>
+#include <cstdio>
 
 #include <cutils/properties.h>
+#include <linux/media.h>
 
-#include <pthread.h>
-#include "msmb_isp.h"
-#include "msmb_ispif.h"
-#include "msmb_camera.h"
-#include "msm_cam_sensor.h"
-
-#include "common/util.h"
-#include "common/timing.h"
-#include "common/swaglog.h"
-#include "common/params.h"
-#include "clutil.h"
-
-#include "sensor_i2c.h"
-#include "camera_qcom.h"
+#include "selfdrive/camerad/cameras/sensor_i2c.h"
+#include "selfdrive/camerad/include/msm_cam_sensor.h"
+#include "selfdrive/camerad/include/msmb_camera.h"
+#include "selfdrive/camerad/include/msmb_isp.h"
+#include "selfdrive/camerad/include/msmb_ispif.h"
+#include "selfdrive/common/clutil.h"
+#include "selfdrive/common/params.h"
+#include "selfdrive/common/swaglog.h"
+#include "selfdrive/common/timing.h"
+#include "selfdrive/common/util.h"
 
 // leeco actuator (DW9800W H-Bridge Driver IC)
 // from sniff
@@ -285,6 +282,12 @@ static void set_exposure(CameraState *s, float exposure_frac, float gain_frac) {
 
 static void do_autoexposure(CameraState *s, float grey_frac) {
   const float target_grey = 0.3;
+
+  s->frame_info_lock.lock();
+  s->measured_grey_fraction = grey_frac;
+  s->target_grey_fraction = target_grey;
+  s->frame_info_lock.unlock();
+
   if (s->apply_exposure == ov8865_apply_exposure) {
     // gain limits downstream
     const float gain_frac_min = 0.015625;
@@ -851,7 +854,7 @@ static void parse_autofocus(CameraState *s, uint8_t *d) {
 
 static std::optional<float> get_accel_z(SubMaster *sm) {
   sm->update(0);
-  if(sm->updated("sensorEvents")){
+  if(sm->updated("sensorEvents")) {
     for (auto event : (*sm)["sensorEvents"].getSensorEvents()) {
       if (event.which() == cereal::SensorEventData::ACCELERATION) {
         if (auto v = event.getAcceleration().getV(); v.size() >= 3)
@@ -1110,7 +1113,7 @@ void process_road_camera(MultiCameraState *s, CameraState *c, int cnt) {
   if (cnt % 3 == 0) {
     const int x = 290, y = 322, width = 560, height = 314;
     const int skip = 1;
-    camera_autoexposure(c, set_exposure_target(b, x, x + width, skip, y, y + height, skip, -1, false, false));
+    camera_autoexposure(c, set_exposure_target(b, x, x + width, skip, y, y + height, skip));
   }
 }
 
@@ -1165,12 +1168,14 @@ void cameras_run(MultiCameraState *s) {
             .timestamp_eof = timestamp,
             .frame_length = (uint32_t)c->frame_length,
             .integ_lines = (uint32_t)c->cur_integ_lines,
-            .global_gain = (uint32_t)c->cur_gain,
             .lens_pos = c->cur_lens_pos,
             .lens_sag = c->last_sag_acc_z,
             .lens_err = c->focus_err,
             .lens_true_pos = c->lens_true_pos,
-            .gain_frac = c->cur_gain_frac,
+            .gain = c->cur_gain_frac,
+            .measured_grey_fraction = c->measured_grey_fraction,
+            .target_grey_fraction = c->target_grey_fraction,
+            .high_conversion_gain = false,
         };
         c->frame_metadata_idx = (c->frame_metadata_idx + 1) % METADATA_BUF_COUNT;
 

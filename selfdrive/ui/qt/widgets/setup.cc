@@ -1,3 +1,5 @@
+#include "selfdrive/ui/qt/widgets/setup.h"
+
 #include <QDebug>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -6,44 +8,34 @@
 #include <QStackedWidget>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <QrCode.hpp>
 
-#include "QrCode.hpp"
-#include "api.hpp"
-#include "common/params.h"
-#include "setup.hpp"
+#include "selfdrive/ui/qt/request_repeater.h"
 
 using qrcodegen::QrCode;
 
 PairingQRWidget::PairingQRWidget(QWidget* parent) : QWidget(parent) {
   qrCode = new QLabel;
   qrCode->setScaledContents(true);
-  QVBoxLayout* v = new QVBoxLayout;
-  v->addWidget(qrCode, 0, Qt::AlignCenter);
-  setLayout(v);
+  QVBoxLayout* main_layout = new QVBoxLayout(this);
+  main_layout->addWidget(qrCode, 0, Qt::AlignCenter);
 
   QTimer* timer = new QTimer(this);
   timer->start(30 * 1000);
-  connect(timer, SIGNAL(timeout()), this, SLOT(refresh()));
-  refresh(); // don't wait for the first refresh
+  connect(timer, &QTimer::timeout, this, &PairingQRWidget::refresh);
 }
 
-void PairingQRWidget::refresh(){
-  QString IMEI = QString::fromStdString(Params().get("IMEI"));
-  QString serial = QString::fromStdString(Params().get("HardwareSerial"));
+void PairingQRWidget::showEvent(QShowEvent *event) {
+  refresh();
+}
 
-  if (std::min(IMEI.length(), serial.length()) <= 5) {
-    qrCode->setText("Error getting serial: contact support");
-    qrCode->setWordWrap(true);
-    qrCode->setStyleSheet(R"(font-size: 60px;)");
-    return;
-  }
+void PairingQRWidget::refresh() {
   QString pairToken = CommaApi::create_jwt({{"pair", true}});
-
-  QString qrString = IMEI + "--" + serial + "--" + pairToken;
+  QString qrString = "https://my.comma.ai/?pair=" + pairToken;
   this->updateQrCode(qrString);
 }
 
-void PairingQRWidget::updateQrCode(QString text) {
+void PairingQRWidget::updateQrCode(const QString &text) {
   QrCode qr = QrCode::encodeText(text.toUtf8().data(), QrCode::Ecc::LOW);
   qint32 sz = qr.getSize();
   // make the image larger so we can have a white border
@@ -68,7 +60,7 @@ void PairingQRWidget::updateQrCode(QString text) {
 }
 
 PrimeUserWidget::PrimeUserWidget(QWidget* parent) : QWidget(parent) {
-  mainLayout = new QVBoxLayout;
+  mainLayout = new QVBoxLayout(this);
   mainLayout->setMargin(30);
 
   QLabel* commaPrime = new QLabel("COMMA PRIME");
@@ -89,7 +81,6 @@ PrimeUserWidget::PrimeUserWidget(QWidget* parent) : QWidget(parent) {
   points = new QLabel();
   mainLayout->addWidget(points, 0, Qt::AlignTop);
 
-  setLayout(mainLayout);
   setStyleSheet(R"(
     QLabel {
       font-size: 70px;
@@ -98,17 +89,15 @@ PrimeUserWidget::PrimeUserWidget(QWidget* parent) : QWidget(parent) {
   )");
 
   // set up API requests
-  QString dongleId = QString::fromStdString(Params().get("DongleId"));
-  if (!dongleId.length()) {
-    return;
+  std::string dongleId = Params().get("DongleId");
+  if (util::is_valid_dongle_id(dongleId)) {
+    std::string url = "https://api.commadotai.com/v1/devices/" + dongleId + "/owner";
+    RequestRepeater *repeater = new RequestRepeater(this, QString::fromStdString(url), "ApiCache_Owner", 6);
+    QObject::connect(repeater, &RequestRepeater::receivedResponse, this, &PrimeUserWidget::replyFinished);
   }
-
-  QString url = "https://api.commadotai.com/v1/devices/" + dongleId + "/owner";
-  RequestRepeater* repeater = new RequestRepeater(this, url, 6, "ApiCache_Owner");
-  QObject::connect(repeater, SIGNAL(receivedResponse(QString)), this, SLOT(replyFinished(QString)));
 }
 
-void PrimeUserWidget::replyFinished(QString response) {
+void PrimeUserWidget::replyFinished(const QString &response) {
   QJsonDocument doc = QJsonDocument::fromJson(response.toUtf8());
   if (doc.isNull()) {
     qDebug() << "JSON Parse failed on getting username and points";
@@ -127,28 +116,26 @@ void PrimeUserWidget::replyFinished(QString response) {
 }
 
 PrimeAdWidget::PrimeAdWidget(QWidget* parent) : QWidget(parent) {
-  QVBoxLayout* vlayout = new QVBoxLayout;
-  vlayout->setMargin(30);
-  vlayout->setSpacing(15);
+  QVBoxLayout* main_layout = new QVBoxLayout(this);
+  main_layout->setMargin(30);
+  main_layout->setSpacing(15);
 
-  vlayout->addWidget(new QLabel("Upgrade now"), 1, Qt::AlignTop);
+  main_layout->addWidget(new QLabel("Upgrade now"), 1, Qt::AlignTop);
 
-  QLabel* description = new QLabel("Become a comma prime member in the comma connect app and get premium features!");
+  QLabel* description = new QLabel("Become a comma prime member at my.comma.ai and get premium features!");
   description->setStyleSheet(R"(
     font-size: 50px;
     color: #b8b8b8;
   )");
   description->setWordWrap(true);
-  vlayout->addWidget(description, 2, Qt::AlignTop);
+  main_layout->addWidget(description, 2, Qt::AlignTop);
 
   QVector<QString> features = {"✓ REMOTE ACCESS", "✓ 14 DAYS OF STORAGE", "✓ DEVELOPER PERKS"};
   for (auto &f: features) {
     QLabel* feature = new QLabel(f);
     feature->setStyleSheet(R"(font-size: 40px;)");
-    vlayout->addWidget(feature, 0, Qt::AlignBottom);
+    main_layout->addWidget(feature, 0, Qt::AlignBottom);
   }
-
-  setLayout(vlayout);
 }
 
 
@@ -157,7 +144,8 @@ SetupWidget::SetupWidget(QWidget* parent) : QFrame(parent) {
 
   // Unpaired, registration prompt layout
 
-  QVBoxLayout* finishRegistationLayout = new QVBoxLayout;
+  QWidget* finishRegistration = new QWidget;
+  QVBoxLayout* finishRegistationLayout = new QVBoxLayout(finishRegistration);
   finishRegistationLayout->setMargin(30);
 
   QLabel* registrationDescription = new QLabel("Pair your device with the comma connect app");
@@ -179,18 +167,17 @@ SetupWidget::SetupWidget(QWidget* parent) : QFrame(parent) {
     background: #585858;
   )");
   finishRegistationLayout->addWidget(finishButton);
-  QObject::connect(finishButton, SIGNAL(released()), this, SLOT(showQrCode()));
+  QObject::connect(finishButton, &QPushButton::released, this, &SetupWidget::showQrCode);
 
-  QWidget* finishRegistration = new QWidget;
-  finishRegistration->setLayout(finishRegistationLayout);
   mainLayout->addWidget(finishRegistration);
 
   // Pairing QR code layout
 
-  QVBoxLayout* qrLayout = new QVBoxLayout;
+  QWidget* q = new QWidget;
+  QVBoxLayout* qrLayout = new QVBoxLayout(q);
 
   qrLayout->addSpacing(30);
-  QLabel* qrLabel = new QLabel("Scan with comma connect!");
+  QLabel* qrLabel = new QLabel("Scan QR code to pair!");
   qrLabel->setWordWrap(true);
   qrLabel->setAlignment(Qt::AlignHCenter);
   qrLabel->setStyleSheet(R"(
@@ -201,8 +188,6 @@ SetupWidget::SetupWidget(QWidget* parent) : QFrame(parent) {
 
   qrLayout->addWidget(new PairingQRWidget, 1);
 
-  QWidget* q = new QWidget;
-  q->setLayout(qrLayout);
   mainLayout->addWidget(q);
 
   primeAd = new PrimeAdWidget;
@@ -213,9 +198,8 @@ SetupWidget::SetupWidget(QWidget* parent) : QFrame(parent) {
 
   mainLayout->setCurrentWidget(primeAd);
 
-  QVBoxLayout *layout = new QVBoxLayout;
-  layout->addWidget(mainLayout);
-  setLayout(layout);
+  QVBoxLayout *main_layout = new QVBoxLayout(this);
+  main_layout->addWidget(mainLayout);
 
   setStyleSheet(R"(
     SetupWidget {
@@ -234,27 +218,29 @@ SetupWidget::SetupWidget(QWidget* parent) : QFrame(parent) {
   setSizePolicy(sp_retain);
 
   // set up API requests
-  QString dongleId = QString::fromStdString(Params().get("DongleId"));
-  QString url = "https://api.commadotai.com/v1.1/devices/" + dongleId + "/";
-  RequestRepeater* repeater = new RequestRepeater(this, url, 5, "ApiCache_Device");
+  std::string dongleId = Params().get("DongleId");
+  if (util::is_valid_dongle_id(dongleId)) {
+    std::string url = "https://api.commadotai.com/v1.1/devices/" + dongleId + "/";
+    RequestRepeater* repeater = new RequestRepeater(this, QString::fromStdString(url), "ApiCache_Device", 5);
 
-  QObject::connect(repeater, SIGNAL(receivedResponse(QString)), this, SLOT(replyFinished(QString)));
-  QObject::connect(repeater, SIGNAL(failedResponse(QString)), this, SLOT(parseError(QString)));
+    QObject::connect(repeater, &RequestRepeater::receivedResponse, this, &SetupWidget::replyFinished);
+    QObject::connect(repeater, &RequestRepeater::failedResponse, this, &SetupWidget::parseError);
+  }
   hide(); // Only show when first request comes back
 }
 
-void SetupWidget::parseError(QString response) {
+void SetupWidget::parseError(const QString &response) {
   show();
   showQr = false;
   mainLayout->setCurrentIndex(0);
 }
 
-void SetupWidget::showQrCode(){
+void SetupWidget::showQrCode() {
   showQr = true;
   mainLayout->setCurrentIndex(1);
 }
 
-void SetupWidget::replyFinished(QString response) {
+void SetupWidget::replyFinished(const QString &response) {
   show();
   QJsonDocument doc = QJsonDocument::fromJson(response.toUtf8());
   if (doc.isNull()) {

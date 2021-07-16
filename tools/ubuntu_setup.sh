@@ -23,7 +23,6 @@ sudo apt-get update && sudo apt-get install -y --no-install-recommends \
     libglfw3-dev \
     libglib2.0-0 \
     liblzma-dev \
-    libmysqlclient-dev \
     libomp-dev \
     libopencv-dev \
     libpng16-16 \
@@ -46,11 +45,17 @@ sudo apt-get update && sudo apt-get install -y --no-install-recommends \
     qt5-default \
     qtmultimedia5-dev \
     qtwebengine5-dev \
+    qtlocation5-dev \
+    qtpositioning5-dev \
+    libqt5sql5-sqlite \
+    libqt5svg5-dev \
     screen \
     sudo \
     vim \
     wget \
-    gcc-arm-none-eabi
+    gcc-arm-none-eabi \
+    libqt5x11extras5-dev \
+    libreadline-dev
 
 # install git lfs
 if ! command -v "git-lfs" > /dev/null 2>&1; then
@@ -63,17 +68,16 @@ if ! command -v "pyenv" > /dev/null 2>&1; then
   curl -L https://github.com/pyenv/pyenv-installer/raw/master/bin/pyenv-installer | bash
 fi
 
-# install bashrc
+# in the openpilot repo
+cd $HOME/openpilot
+
 source ~/.bashrc
 if [ -z "$OPENPILOT_ENV" ]; then
   OP_DIR=$(git rev-parse --show-toplevel)
-  echo "source $OP_DIR/tools/openpilot_env.sh" >> ~/.bashrc
+  printf "\nsource %s/tools/openpilot_env.sh" "$OP_DIR" >> ~/.bashrc
   source ~/.bashrc
   echo "added openpilot_env to bashrc"
 fi
-
-# in the openpilot repo
-cd $HOME/openpilot
 
 # do the rest of the git checkout
 git lfs pull
@@ -81,6 +85,7 @@ git submodule init
 git submodule update
 
 # install python
+PATH=$HOME/.pyenv/bin:$HOME/.pyenv/shims:$PATH
 pyenv install -s 3.8.5
 pyenv global 3.8.5
 pyenv rehash
@@ -90,3 +95,8 @@ eval "$(pyenv init -)"
 pip install --upgrade pip==20.2.4
 pip install pipenv==2020.8.13
 pipenv install --dev --system --deploy
+
+echo
+echo "----   FINISH OPENPILOT SETUP   ----"
+echo "Configure your active shell env by running:"
+echo "source ~/.bashrc"
