@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <map>
+#include <string>
 
 #include <QDebug>
 #include <QDir>
@@ -14,23 +15,26 @@
 #include "selfdrive/ui/qt/util.h"
 #include "selfdrive/ui/qt/qt_window.h"
 
-#define GIT_URL "https://github.com/commaai/openpilot.git"
+std::string get_str(std::string const s) {
+  std::string::size_type pos = s.find('?');
+  assert(pos != std::string::npos);
+  return s.substr(0, pos);
+}
+
+// Leave some extra space for the fork installer
+const std::string GIT_URL = get_str("https://github.com/commaai/openpilot.git" "?                                                                ");
+const std::string BRANCH_STR = get_str(BRANCH "?                                                                ");
+
 #define GIT_SSH_URL "git@github.com:commaai/openpilot.git"
+#define CONTINUE_PATH "/data/continue.sh"
 
-#ifdef QCOM
-  #define CONTINUE_PATH "/data/data/com.termux/files/continue.sh"
-#else
-  #define CONTINUE_PATH "/data/continue.sh"
-#endif
-
-// TODO: remove the other paths after a bit
-const QList<QString> CACHE_PATHS = {"/data/openpilot.cache", "/system/comma/openpilot", "/usr/comma/openpilot"};
+const QString CACHE_PATH = "/data/openpilot.cache";
 
 #define INSTALL_PATH "/data/openpilot"
 #define TMP_INSTALL_PATH "/data/tmppilot"
 
-extern const uint8_t str_continue[] asm("_binary_selfdrive_ui_installer_continue_" BRAND "_sh_start");
-extern const uint8_t str_continue_end[] asm("_binary_selfdrive_ui_installer_continue_" BRAND "_sh_end");
+extern const uint8_t str_continue[] asm("_binary_selfdrive_ui_installer_continue_openpilot_sh_start");
+extern const uint8_t str_continue_end[] asm("_binary_selfdrive_ui_installer_continue_openpilot_sh_end");
 
 bool time_valid() {
   time_t rawtime;
@@ -50,7 +54,7 @@ Installer::Installer(QWidget *parent) : QWidget(parent) {
   layout->setContentsMargins(150, 290, 150, 150);
   layout->setSpacing(0);
 
-  QLabel *title = new QLabel("Installing...");
+  QLabel *title = new QLabel(tr("Installing..."));
   title->setStyleSheet("font-size: 90px; font-weight: 600;");
   layout->addWidget(title, 0, Qt::AlignTop);
 
@@ -104,21 +108,12 @@ void Installer::doInstall() {
     qDebug() << "Waiting for valid time";
   }
 
-  // cleanup
+  // cleanup previous install attempts
   run("rm -rf " TMP_INSTALL_PATH " " INSTALL_PATH);
 
-  // find the cache path
-  QString cache;
-  for (const QString &path : CACHE_PATHS) {
-    if (QDir(path).exists()) {
-      cache = path;
-      break;
-    }
-  }
-
   // do the install
-  if (!cache.isEmpty()) {
-    cachedFetch(cache);
+  if (QDir(CACHE_PATH).exists()) {
+    cachedFetch(CACHE_PATH);
   } else {
     freshClone();
   }
@@ -126,7 +121,7 @@ void Installer::doInstall() {
 
 void Installer::freshClone() {
   qDebug() << "Doing fresh clone";
-  proc.start("git", {"clone", "--progress", GIT_URL, "-b", BRANCH,
+  proc.start("git", {"clone", "--progress", GIT_URL.c_str(), "-b", BRANCH_STR.c_str(),
                      "--depth=1", "--recurse-submodules", TMP_INSTALL_PATH});
 }
 
@@ -136,12 +131,12 @@ void Installer::cachedFetch(const QString &cache) {
   run(QString("cp -rp %1 %2").arg(cache, TMP_INSTALL_PATH).toStdString().c_str());
   int err = chdir(TMP_INSTALL_PATH);
   assert(err == 0);
-  run("git remote set-branches --add origin " BRANCH);
+  run(("git remote set-branches --add origin " + BRANCH_STR).c_str());
 
   updateProgress(10);
 
   proc.setWorkingDirectory(TMP_INSTALL_PATH);
-  proc.start("git", {"fetch", "--progress", "origin", BRANCH});
+  proc.start("git", {"fetch", "--progress", "origin", BRANCH_STR.c_str()});
 }
 
 void Installer::readProgress() {
@@ -175,8 +170,9 @@ void Installer::cloneFinished(int exitCode, QProcess::ExitStatus exitStatus) {
   // ensure correct branch is checked out
   int err = chdir(TMP_INSTALL_PATH);
   assert(err == 0);
-  run("git checkout " BRANCH);
-  run("git reset --hard origin/" BRANCH);
+  run(("git checkout " + BRANCH_STR).c_str());
+  run(("git reset --hard origin/" + BRANCH_STR).c_str());
+  run("git submodule update --init");
 
   // move into place
   run("mv " TMP_INSTALL_PATH " " INSTALL_PATH);
@@ -184,10 +180,12 @@ void Installer::cloneFinished(int exitCode, QProcess::ExitStatus exitStatus) {
 #ifdef INTERNAL
   run("mkdir -p /data/params/d/");
 
+  // https://github.com/commaci2.keys
+  const std::string ssh_keys = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMX2kU8eBZyEWmbq0tjMPxksWWVuIV/5l64GabcYbdpI";
   std::map<std::string, std::string> params = {
     {"SshEnabled", "1"},
     {"RecordFrontLock", "1"},
-    {"GithubSshKeys", SSH_KEYS},
+    {"GithubSshKeys", ssh_keys},
   };
   for (const auto& [key, value] : params) {
     std::ofstream param;
@@ -197,7 +195,7 @@ void Installer::cloneFinished(int exitCode, QProcess::ExitStatus exitStatus) {
   }
   run("cd " INSTALL_PATH " && "
       "git remote set-url origin --push " GIT_SSH_URL " && "
-      "git config remote.origin.fetch \"+refs/heads/*:refs/remotes/origin/*\"");
+      "git config --replace-all remote.origin.fetch \"+refs/heads/*:refs/remotes/origin/*\"");
 #endif
 
   // write continue.sh
@@ -212,16 +210,12 @@ void Installer::cloneFinished(int exitCode, QProcess::ExitStatus exitStatus) {
   run("chmod +x /data/continue.sh.new");
   run("mv /data/continue.sh.new " CONTINUE_PATH);
 
-#ifdef QCOM
-  QTimer::singleShot(100, &QCoreApplication::quit);
-#else
   // wait for the installed software's UI to take over
   QTimer::singleShot(60 * 1000, &QCoreApplication::quit);
-#endif
 }
 
 int main(int argc, char *argv[]) {
-  initApp();
+  initApp(argc, argv);
   QApplication a(argc, argv);
   Installer installer;
   setMainWindow(&installer);

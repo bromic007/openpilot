@@ -1,21 +1,29 @@
 #!/usr/bin/env python3
 import time
-import cereal.messaging as messaging
-from selfdrive.manager.process_config import managed_processes
+
+from cereal import car, log, messaging
+from openpilot.common.params import Params
+from openpilot.system.manager.process_config import managed_processes
+from openpilot.system.hardware import HARDWARE
 
 if __name__ == "__main__":
-  services = ['controlsState', 'deviceState', 'pandaState', 'carParams']
-  procs = ['camerad', 'ui', 'modeld', 'calibrationd']
+  CP = car.CarParams(notCar=True, wheelbase=1, steerRatio=10)
+  Params().put("CarParams", CP.to_bytes())
 
+  procs = ['camerad', 'ui', 'modeld', 'calibrationd', 'plannerd', 'dmonitoringmodeld', 'dmonitoringd']
   for p in procs:
     managed_processes[p].start()
 
-  pm = messaging.PubMaster(services)
+  pm = messaging.PubMaster(['controlsState', 'deviceState', 'pandaStates', 'carParams'])
 
-  msgs = {s: messaging.new_message(s) for s in services}
+  msgs = {s: messaging.new_message(s) for s in ['controlsState', 'deviceState', 'carParams']}
   msgs['deviceState'].deviceState.started = True
-  msgs['pandaState'].pandaState.ignitionLine = True
+  msgs['deviceState'].deviceState.deviceType = HARDWARE.get_device_type()
   msgs['carParams'].carParams.openpilotLongitudinalControl = True
+
+  msgs['pandaStates'] = messaging.new_message('pandaStates', 1)
+  msgs['pandaStates'].pandaStates[0].ignitionLine = True
+  msgs['pandaStates'].pandaStates[0].pandaType = log.PandaState.PandaType.uno
 
   try:
     while True:
